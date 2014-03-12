@@ -1,0 +1,61 @@
+#! /usr/bin/python
+
+import argparse
+
+quark_types = {'u': 0, 'd': 0, '0': 0, 's': 1, '1':1}
+smearing_types = {'gauss': 0, 'GAUSS0': 0, 'point':1, 'POINT': 1}
+
+def extract_correlator(file, ops, quarks, srcsm, snksm):
+	corr = []
+	for line in file:
+		if line.find("START_PROP") > -1:
+			header = line.split()
+
+			curr_ops = header[1]
+			curr_quarks = [quark_types[header[4]], quark_types[header[6]]]
+			curr_sm = [smearing_types[header[8]], smearing_types[header[10]]]
+
+			if curr_ops == ops[0] + ops[1]:
+				if curr_quarks == [quark_types[quarks[0]], quark_types[quarks[1]]]:
+					if curr_sm == [smearing_types[srcsm], smearing_types[snksm]]:
+						corr_line = file.next()
+						while corr_line.find("END_PROP") < 0:
+							corr.append(map(float, corr_line.split()))
+							corr_line = file.next()
+
+					else:
+						continue
+				else:
+					continue
+			else:
+				continue
+
+	return corr
+
+
+parser = argparse.ArgumentParser(description='Extract correlators from dynqcd outputs and return the mean correlator.')
+parser.add_argument('manfile', action='store', type=argparse.FileType('r'), help='a manifest input file containing the output files to be processed')
+parser.add_argument('ops', action='store', nargs=2, help='the interpolating operators used for the correlator you want to extract')
+parser.add_argument('quarks', action='store', nargs=2, choices=['u', 'd', 's'], help='the quark flavors used within the specified interpolating operators')
+parser.add_argument('--srcsm', action='store', choices=['gauss'], default='gauss', help='source smearing (default: gauss)')
+parser.add_argument('--snksm', action='store', choices=['gauss', 'point'], default='gauss', help='source smearing (default: gauss)')
+parser.add_argument('--save', '-s', action='store', type=argparse.FileType('w'), help='save the mean correlator into file')
+
+args = parser.parse_args()
+
+corrs = []
+for line in args.manfile:
+	file = open(line.rstrip(), 'r')
+	corrs.append(extract_correlator(file, args.ops, args.quarks, args.srcsm, args.snksm))
+
+correlator = corrs[0]
+N = len(corrs)
+for i in range(1, N):
+	correlator = map(lambda x1, y1: map(lambda x2, y2: x2+y2, x1, y1), correlator, corrs[i])
+
+correlator = map(lambda x: map(lambda y: y/N, x), correlator)
+
+for row in correlator:
+	for elt in row:
+		print(str(elt).ljust(10)),
+	print ""

@@ -1,0 +1,118 @@
+#! /usr/bin/python
+
+import argparse
+import ntpath
+import re
+
+parser = argparse.ArgumentParser(description='Extract correlators from dynqcd outputs.')
+parser.add_argument('manfile', action='store', type=argparse.FileType('r'), help='a manifest input file containing the output files to be processed')
+parser.add_argument('--GEVP', action='store_true', help='enable GEVP data extraction')
+parser.add_argument('--mean', action='store', nargs='?', const='mean.dat', type=argparse.FileType('w'), help='compute mean of extracted correlators and save in file with given name (default: %(default)s)')
+
+args = parser.parse_args()
+
+# corrs is a dictionary of the form {header: corr}
+def print_correlators(corrs, ofile):
+	for header, corr in corrs.items():
+		ofile.write(header + '\n')
+		corr_template = "{:<16.6e}"
+		for corr_elt in corr:
+			ofile.write("{:<3} ".format(int(corr_elt[0])))
+			for corr_elt_part in corr_elt[1:]:
+				ofile.write(corr_template.format(corr_elt_part))
+			ofile.write('\n')
+		ofile.write('\n')
+
+def extract_correlators(ifile):
+	corrs = {}
+	for line in ifile:
+		if line.find("START_PROP") > -1:
+			header = line.split()
+			curr_header = "# " + ' '.join(header[1:])
+			corrs[curr_header] = []
+
+			corr_line = ifile.next()
+			while corr_line.find("END_PROP") < 0:
+				corr = corr_line.split()
+				corrs[curr_header].append(map(float, corr))
+				corr_line = ifile.next()
+
+		elif line.find("AN_RESO matrix") > -1 and (args.GEVP):
+			float_regex = re.compile(r"[+-]? *(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?") # regex for a float
+			gevp_line = line
+			curr_header = "# ViVi"
+			corrs[curr_header] = []
+
+			while gevp_line.find("AN_RESO matrix") > -1:
+				gevp = re.findall(float_regex, gevp_line)
+				corrs[curr_header].append(map(float, gevp))
+				gevp_line = ifile.next()
+
+	return corrs
+
+def process_output_file(ifile, ofile):
+	print("Processing file " + ifile.name + "...\n")
+	for line in ifile:
+		if line.find("START_PROP") > -1:
+			header = line.split()
+			ofile.write("# " + ' '.join(header[1:]) + '\n')
+			corr_template = "{:<13} "
+			corr_line = ifile.next()
+			while corr_line.find("END_PROP") < 0:
+				corr = corr_line.split()
+				ofile.write("{:<3} ".format(corr[0]))
+				for corr_elt in corr[1:]:
+					ofile.write(corr_template.format(corr_elt))
+				ofile.write('\n')
+				corr_line = ifile.next()
+			ofile.write('\n')
+
+		elif line.find("AN_RESO matrix") > -1 and (args.GEVP):
+			float_regex = re.compile(r"[+-]? *(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?") # regex for a float
+			gevp_line = ifile.next()
+			gevp_template = "{0:<3} {1:<13} {2:<13} {3:<13} {4:<13} {5:<13} {6:<13} {7:<13} {8:<13}\n"
+			ofile.write("# ViVi\n")
+			while gevp_line.find("AN_RESO matrix") > -1:
+				gevp = re.findall(float_regex, gevp_line)
+				ofile.write(gevp_template.format(*gevp))
+				gevp_line = ifile.next()
+
+
+def add_corr(mean, corr):
+	assert len(mean) == len(corr), 'correlators have different lengths'
+	for i in range(len(mean)):
+		for j in range(1, len(mean[i])):
+			mean[i][j] += corr[i][j]
+
+def divide_corr(corr, N):
+	for i in range(len(corr)):
+		for j in range(1, len(corr[i])):
+			corr[i][j] /= N
+
+
+
+corr_mean = {}
+N = 0
+
+for line in args.manfile:
+	ifname = line.rstrip()
+	ofname = ntpath.basename(ifname) + '.extr'
+
+	with open(ifname, 'r') as ifile:
+		with open(ofname, 'w') as ofile:
+			print("Processing file " + ifile.name + "...\n")
+			corrs = extract_correlators(ifile)
+			print_correlators(corrs, ofile)
+
+			if args.mean:
+				if N == 0:
+					corr_mean = corrs
+				else:
+					for header in corr_mean:
+						add_corr(corr_mean[header], corrs[header])
+				N += 1
+				
+if args.mean:
+	for header in corr_mean:
+		divide_corr(corr_mean[header], N)
+	print_correlators(corr_mean, args.mean)
